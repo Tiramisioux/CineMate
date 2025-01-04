@@ -60,8 +60,8 @@ class AnalogControls(threading.Thread):
         if not steps:
             return None
         step_range = len(steps)
-        step_index = int(((adc_value - min_adc) / (max_adc - min_adc)) * (step_range - 1))
-        return steps[min(max(step_index, 0), step_range - 1)]
+        step_index = int(((adc_value - min_adc) / (max_adc - min_adc)) * (step_range))
+        return steps[min(max(step_index, 0), step_range)]
 
 
     def find_nearest_step(self, value, steps):

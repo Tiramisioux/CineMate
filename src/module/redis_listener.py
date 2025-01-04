@@ -132,8 +132,8 @@ class RedisListener:
                         expected_fps = float(self.redis_controller.get_value('fps'))
                         if self.current_framerate is not None:
                             fps_difference = abs((self.current_framerate) - expected_fps)
-                            # print(f"Expected FPS: {expected_fps}, Actual FPS: {self.current_framerate*1000}")
-                            # print(f"FPS difference: {fps_difference}")
+                            #logging.info(f"Expected FPS: {expected_fps}, Actual FPS: {self.current_framerate*1000}")
+                            #logging.info(f"FPS difference: {fps_difference}")
                             if fps_difference > 1 and not self.drop_frame:
                                 self.drop_frame = True
                                 logging.info("Drop frame detected")
@@ -235,8 +235,8 @@ class RedisListener:
                 logging.debug(f"Time differences between consecutive frames: {time_diffs}")
                 logging.debug(f"Average time difference: {average_time_diff}")
                 
-                self.current_framerate = 1.0 / average_time_diff if average_time_diff != 0 else 0
-                logging.debug(f"Calculated current framerate: {self.current_framerate:.6f} FPS")
+                self.current_framerate = (1.0 / average_time_diff if average_time_diff != 0 else 0)*1000
+                logging.debug(f"Calculated current framerate: {self.current_framerate:.3f} FPS")
             else:
                 logging.warning("Time differences calculation resulted in an empty list.")
                 self.current_framerate = None

@@ -698,6 +698,7 @@ class CinePiController:
         self.wb_cg_rb_array = {}  # Ensuring it is initialized as a dictionary
 
         try:
+
             tuning_file_path = f"/home/pi/cinemate/resources/tuning_files/{self.current_sensor}.json"
             logging.info(f"Loading tuning file from: {tuning_file_path}")
 
