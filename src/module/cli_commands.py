@@ -90,45 +90,55 @@ class CommandExecutor(threading.Thread):
 
     def handle_received_data(self, data):
         """Handles received input data and executes corresponding commands."""
-        logging.info(f"Received: {data}")  # Log the received data
-        input_command = data.strip().split()  # Split the input into command and possible arguments
+        logging.info(f"Received: {data.strip()}")  # Log the received data
+        input_command = data.strip().split()  # Split the input into parts
 
         if not input_command:
-            return  # If there's no command provided, just return
+            return  # If there's no input, just return
 
-        if len(input_command) > 1:
-            command_name = ' '.join(input_command[:-1])
-            command_args = input_command[-1:]
-        else:
-            command_name = input_command[0]
-            command_args = []
+        # Reconstruct the full command name by trying all possible matches
+        command_name = None
+        command_args = []
 
-        if command_name in self.commands:
-            func, expected_types = self.commands[command_name]
-            
-            if isinstance(expected_types, list):
-                if command_args:
-                    arg = command_args[0]
-                    for expected_type in filter(None, expected_types):
-                        if self.is_valid_arg(arg, expected_type):
-                            func(expected_type(arg))
-                            return
-                    logging.info(f"Invalid argument type for command '{command_name}'")
-                else:
-                    func()  # Call the function without arguments (toggle behavior)
-            else:
-                if command_args:
-                    arg = command_args[0]
-                    if self.is_valid_arg(arg, expected_types):
-                        func(expected_types(arg))
+        # Start with the longest possible command name and reduce until match is found
+        for i in range(len(input_command), 0, -1):
+            potential_command = ' '.join(input_command[:i])
+            if potential_command in self.commands:
+                command_name = potential_command
+                command_args = input_command[i:]
+                break
+
+        if not command_name:
+            logging.info(f"Command '{data.strip()}' not found")
+            return
+
+        func, expected_types = self.commands[command_name]
+
+        # Handle commands with arguments or those that can be called without arguments
+        if isinstance(expected_types, list):  # If the command can take multiple types
+            if command_args:  # Arguments provided
+                arg = command_args[0]
+                for expected_type in filter(None, expected_types):
+                    if self.is_valid_arg(arg, expected_type):
+                        func(expected_type(arg))  # Call function with converted argument
                         return
-                    logging.info(f"Invalid argument type for command '{command_name}'")
-                elif expected_types is None:
-                    func()
+                logging.info(f"Invalid argument type for command '{command_name}'")
+            else:
+                func()  # Call the function without arguments
+        else:  # Single expected type or no argument
+            if command_args:  # Arguments provided
+                arg = command_args[0]
+                if self.is_valid_arg(arg, expected_types):
+                    func(expected_types(arg))  # Call function with converted argument
+                    return
+                logging.info(f"Invalid argument type for command '{command_name}'")
+            else:
+                if expected_types is None:  # No arguments expected
+                    func()  # Call the function without arguments
                 else:
                     logging.info(f"Command '{command_name}' requires an argument")
-        else:
-            logging.info(f"Command '{command_name}' not found")
+
+
 
     def run(self):
         """Thread run function to continuously process input commands."""
