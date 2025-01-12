@@ -8,8 +8,8 @@ import math
 import subprocess
 from threading import Thread
 
-# Import RedisListener
-from module.redis_listener import RedisListener
+# # Import RedisListener
+# from module.redis_listener import RedisListener
 
 class CinePiController:
     def __init__(self,
@@ -18,6 +18,7 @@ class CinePiController:
                  pwm_controller,
                  ssd_monitor,
                  sensor_detect,
+                 redis_listener,
                  iso_steps,
                  shutter_a_steps,
                  fps_steps,
@@ -31,6 +32,7 @@ class CinePiController:
         self.redis_controller = redis_controller
         self.ssd_monitor = ssd_monitor
         self.sensor_detect = sensor_detect
+        self.redis_listener = redis_listener
         
         self.iso_steps = iso_steps
         self.shutter_a_steps = shutter_a_steps
@@ -40,7 +42,7 @@ class CinePiController:
         
         self.wb_cg_rb_array = {}  # Initialize as an empty dictionary
         
-        self.redis_listener = RedisListener(redis_controller)
+        # self.redis_listener = RedisListener(redis_controller)
         self.fps = int(round(float(self.redis_controller.get_value('fps_last'))))
         
         # Set startup flag
@@ -61,7 +63,7 @@ class CinePiController:
         self.fps_multiplier = 1
         self.pwm_mode = False
         self.trigger_mode = 0
-        self.fps_correction_factor = 1 #0.99798 # 0.9980 for imx585 mono
+        self.fps_correction_factor = 1 # 24/24.002 #0.99798 # 0.9980 for imx585 mono
         self.fps_saved = float(self.redis_controller.get_value('fps'))
         self.fps_double = False
         self.ramp_up_speed = 0.2
@@ -727,26 +729,38 @@ class CinePiController:
             logging.info(f"Parsed b_values: {b_values}")
 
             for wb in self.wb_steps:
-                lower_idx = max(i for i, temp in enumerate(temperatures) if temp <= wb)
-                upper_idx = min(i for i, temp in enumerate(temperatures) if temp >= wb)
+                try:
+                    if wb < min(temperatures):
+                        # Extrapolate below the minimum temperature
+                        lower_idx, upper_idx = 0, 1
+                    elif wb > max(temperatures):
+                        # Extrapolate above the maximum temperature
+                        lower_idx, upper_idx = len(temperatures) - 2, len(temperatures) - 1
+                    else:
+                        # Interpolation within the known range
+                        lower_idx = max(i for i, temp in enumerate(temperatures) if temp <= wb)
+                        upper_idx = min(i for i, temp in enumerate(temperatures) if temp >= wb)
 
-                logging.info(f"Interpolating for wb step: {wb}K, lower index: {lower_idx}, upper index: {upper_idx}")
+                    logging.info(f"Processing wb step: {wb}K, lower index: {lower_idx}, upper index: {upper_idx}")
 
-                if lower_idx == upper_idx:
-                    r_interp = r_values[lower_idx]
-                    b_interp = b_values[lower_idx]
-                    logging.info(f"Exact match found at index {lower_idx}, r_interp: {r_interp}, b_interp: {b_interp}")
-                else:
-                    r_interp = self.interpolate(temperatures[lower_idx], r_values[lower_idx],
-                                                temperatures[upper_idx], r_values[upper_idx], wb)
-                    b_interp = self.interpolate(temperatures[lower_idx], b_values[lower_idx],
-                                                temperatures[upper_idx], b_values[upper_idx], wb)
-                    logging.info(f"Interpolated values for {wb}K - r_interp: {r_interp}, b_interp: {b_interp}")
+                    if lower_idx == upper_idx:
+                        # Exact match with known temperature
+                        r_interp = r_values[lower_idx]
+                        b_interp = b_values[lower_idx]
+                    else:
+                        # Interpolation or extrapolation
+                        r_interp = self.interpolate(temperatures[lower_idx], r_values[lower_idx],
+                                                    temperatures[upper_idx], r_values[upper_idx], wb)
+                        b_interp = self.interpolate(temperatures[lower_idx], b_values[lower_idx],
+                                                    temperatures[upper_idx], b_values[upper_idx], wb)
 
-                self.wb_cg_rb_array[wb] = (round(1/r_interp, 1), round(1/b_interp, 1))
-                logging.info(f"Calculated reciprocal cg_rb for {wb}K: {self.wb_cg_rb_array[wb]}")
+                    self.wb_cg_rb_array[wb] = (round(1/r_interp, 1), round(1/b_interp, 1))
+                    logging.info(f"Calculated reciprocal cg_rb for {wb}K: {self.wb_cg_rb_array[wb]}")
 
-            logging.info(f"Initialized wb_cg_rb_array: {self.wb_cg_rb_array}")
+                except ValueError as e:
+                    logging.error(f"Error processing wb step {wb}: {e}")
+                    continue
+
         except KeyError as e:
             logging.error(f"Key error in initializing wb_cg_rb_array: {e}")
             self.wb_cg_rb_array = {}
@@ -841,7 +855,7 @@ class CinePiController:
         }
 
         # Retrieve current mode from Redis
-        current_mode = int(self.redis_controller.get_value('trigger_mode', 0))
+        current_mode = int(self.redis_controller.get_value('trigger_mode'))
 
         if value is None:
             # Toggle to the next mode

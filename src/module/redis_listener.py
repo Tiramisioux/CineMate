@@ -251,7 +251,7 @@ class RedisListener:
 
             fps_value = self.redis_controller.get_value('fps')
             try:
-                fps_float = float(fps_value)
+                fps_float = int(round(float((fps_value))))
                 logging.info(f"Expected framerate retrieved from Redis: {fps_float} FPS")
 
                 expected_frames = int(fps_float * time_diff_seconds)

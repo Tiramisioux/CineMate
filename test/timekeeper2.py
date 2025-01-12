@@ -20,16 +20,14 @@ logger = logging.getLogger(__name__)
 class RedisController:
     def __init__(self):
         self.redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
-    
+
     def get_value(self, key):
         value = self.redis_client.get(key)
         return float(value) if value else None
 
     def set_value(self, key, value):
-        try:
-            self.redis_client.set(key, value)
-        except Exception as e:
-            logger.error(f"Failed to set Redis key '{key}' to value '{value}': {e}")
+        self.redis_client.set(key, value)
+        self.redis_client.publish('cp_controls', key)
 
 class TimeMonitor:
     def __init__(self, redis_controller, target_framerate=24.0):
@@ -38,18 +36,18 @@ class TimeMonitor:
         self.total_frames = 0
         self.start_time = time.time()
         self.cumulative_error = 0.0  # Track cumulative error
-        self.frame_rate_window = deque(maxlen=100)  # Last 100 frame rates
-        self.lower_bound = None
-        self.upper_bound = None
-        self.use_lower_value = True  # Start with the lower bound
+        self.frame_rate_window = deque(maxlen=100)  # Track the last 100 frame rates
+        self.total_frame_rate_sum = 0.0  # Sum of all frame rates since start
+        self.flip_fps_values = [23.975, 23.976]  # Alternating FPS values
+        self.current_flip_index = 0
 
         self.listener_thread = threading.Thread(target=self.listen)
         self.listener_thread.daemon = True
         self.listener_thread.start()
 
-        self.find_optimal_bounds_thread = threading.Thread(target=self.find_optimal_bounds)
-        self.find_optimal_bounds_thread.daemon = True
-        self.find_optimal_bounds_thread.start()
+        self.flip_thread = threading.Thread(target=self.manage_fps)
+        self.flip_thread.daemon = True
+        self.flip_thread.start()
 
     def listen(self):
         pubsub = self.redis_controller.redis_client.pubsub()
@@ -63,94 +61,91 @@ class TimeMonitor:
                         framerate = stats_data.get('framerate', None)
                         if framerate is not None and framerate > 0:
                             self.total_frames += 1
+                            self.total_frame_rate_sum += framerate
                             deviation = framerate - self.target_framerate
                             self.cumulative_error += deviation
-
-                            # Add frame rate to the rolling window
                             self.frame_rate_window.append(framerate)
-                            recent_average_fps = sum(self.frame_rate_window) / len(self.frame_rate_window)
 
                             # Calculate elapsed time and effective FPS
                             elapsed_time = time.time() - self.start_time
                             effective_fps = self.total_frames / elapsed_time if elapsed_time > 0 else 0
 
-                            logger.info(f"Current Frame Rate: {framerate:.6f} FPS | Effective FPS: {effective_fps:.6f} | Cumulative Error: {self.cumulative_error:.6f} | Recent Average FPS (Last 100): {recent_average_fps:.6f}")
+                            # Calculate average frame rate of the last 100 frames
+                            recent_average_fps = sum(self.frame_rate_window) / len(self.frame_rate_window) if len(self.frame_rate_window) > 0 else 0
+
+                            # Calculate average frame rate of all frames since start
+                            overall_average_fps = self.total_frame_rate_sum / self.total_frames if self.total_frames > 0 else 0
+
+                            logger.info(f"Current Frame Rate: {framerate:.6f} FPS | Effective FPS: {effective_fps:.6f} | Cumulative Error: {self.cumulative_error:.6f} | Recent Average FPS (Last 100): {recent_average_fps:.6f} | Overall Average FPS: {overall_average_fps:.6f}")
 
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse JSON data: {e}")
 
-    def find_optimal_bounds(self):
-        step = 0.001
-        margin = 0.010
-        lower_fps = self.target_framerate - margin
-        upper_fps = self.target_framerate + margin
-
-        optimal_lower = None
-        optimal_upper = None
-
-        while not (optimal_lower and optimal_upper):
-            for fps in [round(lower_fps + step * i, 3) for i in range(int((upper_fps - lower_fps) / step) + 1)]:
-                try:
-                    self.redis_controller.set_value('fps', fps)
-                    self.redis_controller.redis_client.publish('cp_controls', 'fps')
-                    logger.info(f"Testing FPS: {fps:.3f}")
-                    time.sleep(5)  # Allow for 100 frames
-
-                    if len(self.frame_rate_window) == self.frame_rate_window.maxlen:
-                        recent_average_fps = sum(self.frame_rate_window) / len(self.frame_rate_window)
-
-                        logger.info(f"Tested FPS: {fps:.3f} | Recent Average FPS: {recent_average_fps:.6f}")
-
-                        if recent_average_fps < self.target_framerate and (optimal_lower is None or (recent_average_fps > self.target_framerate - 0.001 and recent_average_fps > optimal_lower)):
-                            optimal_lower = fps
-                            logger.info(f"New Optimal Lower FPS: {optimal_lower:.3f}")
-                        elif recent_average_fps > self.target_framerate and (optimal_upper is None or (recent_average_fps < self.target_framerate + 0.001 and recent_average_fps < optimal_upper)):
-                            optimal_upper = fps
-                            logger.info(f"New Optimal Upper FPS: {optimal_upper:.3f}")
-
-                except Exception as e:
-                    logger.error(f"Error during FPS testing for {fps:.3f}: {e}")
-
-            if optimal_lower and optimal_upper:
-                self.lower_bound = optimal_lower
-                self.upper_bound = optimal_upper
-                self.cumulative_error = 0  # Reset accumulated error
-                logger.info(f"Optimal Bounds Found: Lower FPS={self.lower_bound:.3f} (Avg FPS={sum(self.frame_rate_window) / len(self.frame_rate_window):.6f}), Upper FPS={self.upper_bound:.3f} (Avg FPS={sum(self.frame_rate_window) / len(self.frame_rate_window):.6f})")
-                self.start_flip_switch_mechanism()
-                return
-
-    def start_flip_switch_mechanism(self):
-        error_threshold = 0.001  # Threshold for accumulated error to trigger a switch
-        monitoring_interval = 0.1  # Check every 0.5 seconds
+    def manage_fps(self):
+        last_cumulative_error = 0.0
+        error_rate_smoothing = deque(maxlen=10)  # Smooth the error rate over the last 10 iterations
 
         while True:
             try:
-                # Determine current FPS based on flip state
-                current_fps = self.lower_bound if self.use_lower_value else self.upper_bound
+                # Set the current FPS value in Redis
+                current_fps = self.flip_fps_values[self.current_flip_index]
                 self.redis_controller.set_value('fps', current_fps)
-                self.redis_controller.redis_client.publish('cp_controls', 'fps')
-                logger.info(f"Switching FPS to: {current_fps:.3f}")
+                logger.info(f"Set Redis FPS to {current_fps:.3f}")
 
-                # Monitor and switch based on cumulative error
-                accumulated_error_start = self.cumulative_error
-                time.sleep(monitoring_interval * 1)  # Wait for 10 intervals
+                # Calculate recent average FPS
+                recent_average_fps = sum(self.frame_rate_window) / len(self.frame_rate_window) if len(self.frame_rate_window) > 0 else 0
 
-                # Calculate the difference in accumulated error
-                accumulated_error_diff = self.cumulative_error - accumulated_error_start
-                logger.info(f"Accumulated Error Change: {accumulated_error_diff:.6f}")
+                # Calculate expected correction per frame
+                expected_correction_per_frame = (current_fps - self.target_framerate) / current_fps
 
-                # Flip only if the accumulated error shows significant correction need
-                if abs(self.cumulative_error) > error_threshold or accumulated_error_diff > 0:
-                    self.use_lower_value = not self.use_lower_value  # Flip the switch
-                    logger.info(f"Flipping FPS switch. New State: {'Lower' if self.use_lower_value else 'Upper'}")
-                    #self.cumulative_error = 0  # Reset accumulated error after switching
+                # Estimate frames needed to correct current error
+                if expected_correction_per_frame != 0:
+                    frames_needed = abs(self.cumulative_error / expected_correction_per_frame)
+                else:
+                    frames_needed = 100  # Default to 100 frames if correction per frame is zero (unlikely case)
 
+                # Convert frames needed to time (in seconds) based on current FPS
+                hold_time = frames_needed / current_fps
+
+                # Adjust hold time based on recent FPS trends and error rate
+                if recent_average_fps < self.target_framerate:
+                    hold_time *= 1.1  # Extend hold time if recent FPS is below target
+                elif recent_average_fps > self.target_framerate:
+                    hold_time *= 0.9  # Shorten hold time if recent FPS is above target
+
+                # Calculate error rate and smooth it
+                error_rate = (self.cumulative_error - last_cumulative_error) / max(1, hold_time)
+                error_rate_smoothing.append(error_rate)
+                smoothed_error_rate = sum(error_rate_smoothing) / len(error_rate_smoothing)
+
+                if smoothed_error_rate > 0:
+                    hold_time *= 0.95  # Reduce hold time slightly if error is increasing
+                elif smoothed_error_rate < 0:
+                    hold_time *= 1.05  # Increase hold time slightly if error is decreasing
+
+                # Cap hold time to a reasonable range
+                hold_time = max(1, min(10, hold_time))
+
+                logger.info(
+                    f"Holding FPS {current_fps:.3f} for {hold_time:.2f} seconds | "
+                    f"Cumulative Error: {self.cumulative_error:.6f} | Expected Correction/Frame: {expected_correction_per_frame:.6f} | "
+                    f"Recent Average FPS: {recent_average_fps:.6f} | Smoothed Error Rate: {smoothed_error_rate:.6f}"
+                )
+
+                # Update last cumulative error
+                last_cumulative_error = self.cumulative_error
+
+                # Wait for the calculated hold time
+                time.sleep(hold_time)
+
+                # Switch FPS values
+                self.current_flip_index = (self.current_flip_index + 1) % len(self.flip_fps_values)
             except Exception as e:
-                logger.error(f"Error in flip switch mechanism: {e}")
+                logger.error(f"Exception in manage_fps: {e}")
 
     def stop(self):
         self.listener_thread.join()
-        self.find_optimal_bounds_thread.join()
+        self.flip_thread.join()
         logger.info("TimeMonitor stopped.")
 
 def main():

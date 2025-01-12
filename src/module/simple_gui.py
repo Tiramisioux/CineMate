@@ -104,9 +104,9 @@ class SimpleGUI(threading.Thread):
                 "wb_label": {"position": (950, -1), "font_size": 18},
                 "color_temp": {"position": (983, -7), "font_size": 34},
                 "color_temp_libcamera": {"position": (1083, -7), "font_size": 34},                
-                "exposure_label": {"position": (1280, -1), "font_size": 18},
-                "exposure_time": {"position": (1320, -7), "font_size": 34},
-                "pwm_mode": {"position": (1273, -2), "font_size": 26},
+                "exposure_label": {"position": (1273, -1), "font_size": 18},
+                "exposure_time": {"position": (1313, -7), "font_size": 34},
+                "pwm_mode": {"position": (1430, -2), "font_size": 26},
                 # "shutter_a_sync": {"position": (1345, -2), "font_size": 26},
                 "lock": {"position": (1530, -2), "font_size": 26},
                 "low_voltage": {"position": (1550, -2), "font_size": 26},
@@ -173,7 +173,6 @@ class SimpleGUI(threading.Thread):
             "fps_label": "FPS",
             "fps": round(float(self.redis_controller.get_value('fps'))),
             "fps_actual": ("/ " + str(round(float(self.redis_listener.current_framerate), 3))) if self.redis_listener.current_framerate is not None else "/ N/A",
-            #"sync_effort_level": self.timekeeper.get_effort_level(),
             "exposure_label": "EXP",
             "exposure_time": str(self.cinepi_controller.exposure_time_fractions),
             "sensor": str.upper(self.redis_controller.get_value("sensor")),
@@ -198,18 +197,9 @@ class SimpleGUI(threading.Thread):
         # Clean the string to only keep digits, blank spaces, and the / sign
         cleaned_frame_count_string = re.sub(r"[^0-9 /]", "", frame_count_string)
         values["frame_count"]= frame_count_string
-
-        if values["fps"] != int(float(self.redis_controller.get_value('fps_user'))):
-            self.colors["fps"]["normal"] = "yellow"
         
-        elif self.cinepi_controller.trigger_mode != 0:
+        if self.cinepi_controller.trigger_mode != 0:
             values["pwm_mode"] = "PWM"
-            self.colors["shutter_speed"]["normal"] = "lightgreen"
-            self.colors["fps"]["normal"] = "lightgreen"
-        
-        else:
-            self.colors["shutter_speed"]["normal"] = "white"
-            self.colors["fps"]["normal"] = "white"
 
         if self.cinepi_controller.fps_double:
             self.colors["fps"]["normal"] = "lightgreen"

@@ -196,12 +196,15 @@ if __name__ == "__main__":
 
     dmesg_monitor = DmesgMonitor()
     dmesg_monitor.start()
+    
+    redis_listener = RedisListener(redis_controller)
 
     cinepi_controller = CinePiController(cinepi,
                                          redis_controller,
                                          pwm_controller,
                                          ssd_monitor,
                                          sensor_detect,
+                                         redis_listener,
                                          iso_steps=settings['arrays']['iso_steps'],
                                          shutter_a_steps=settings['arrays']['shutter_a_steps'],
                                          fps_steps=settings['arrays']['fps_steps'],
@@ -213,7 +216,7 @@ if __name__ == "__main__":
 
     command_executor = CommandExecutor(cinepi_controller, cinepi)
     command_executor.start()
-    redis_listener = RedisListener(redis_controller)
+    
     battery_monitor = BatteryMonitor()
     # serial_handler = SerialHandler(command_executor.handle_received_data, 9600, log_queue=log_queue)
     # serial_handler.start()
